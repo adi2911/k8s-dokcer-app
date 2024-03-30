@@ -1,0 +1,108 @@
+To replace Travis with Github Actions you can do the following:
+
+Before beginning, make sure you have followed the two notes to create a Google Cloud Project, and GKE cluster here:
+
+https://www.udemy.com/course/docker-and-kubernetes-the-complete-guide/learn/lecture/25406546#questions/17305086
+
+Then, make sure you have created a Service Account and have downloaded the JSON key:
+
+https://www.udemy.com/course/docker-and-kubernetes-the-complete-guide/learn/lecture/25408376#questions/17305086
+
+1. Delete your .travis.yml file from the local project. Optionally, you may also delete the deploy.sh file as this will be written directly into our workflow.
+
+2. Navigate to your Github repository.
+
+3. Click Settings
+
+4. Click Secrets
+
+5. Click Actions
+
+6. Click New repository secret
+
+7. Create key/value pair secrets for DOCKER_USERNAME, DOCKER_PASSWORD
+
+8. Create a GKE_SA_KEY secret key. Paste the contents of the Service Account JSON downloaded earlier as the value. Important - you will not need to encrypt the service account file locally using a container. This was only needed for use with Travis.
+
+Important - You do not need to create an environment or environment secrets. Doing so will cause a failure of the action without making additional changes to the workflow file.
+
+All that is required is simply creating the repository secrets as shown below:
+
+
+
+
+
+
+9. In your local development environment, create a .github directory at the root of your project
+
+10. Create a workflows directory inside the new .github directory
+
+11. In the workflows directory create a deploy.yaml file which should contain the following code (name does not matter):
+
+Important - remember to change your project_id, cluster_name, and location to the values used by your GKE environment and change my DockerHub username and images to your own.
+
+
+
+name: Deploy MultiK8s
+on:
+  push:
+    branches:
+      - main
+ 
+env:
+  SHA: $(git rev-parse HEAD)
+ 
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+ 
+      - name: Test
+        run: |-
+          docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
+          docker build -t cygnetops/react-test -f ./client/Dockerfile.dev ./client
+          docker run -e CI=true cygnetops/react-test npm test
+ 
+      - name: Set Service Key
+        uses: 'google-github-actions/auth@v0'
+        with:
+          credentials_json: '${{ secrets.GKE_SA_KEY }}'
+ 
+      - name: Set Project
+        uses: google-github-actions/setup-gcloud@v0
+        with:
+          project_id: multi-338920
+ 
+      - name: Auth
+        run: |-
+          gcloud --quiet auth configure-docker
+ 
+      - name: Get Credentials
+        uses: google-github-actions/get-gke-credentials@v0
+        with:
+          cluster_name: multi-cluster
+          location: us-central1-c
+ 
+      - name: Build
+        run: |-
+          docker build -t cygnetops/multi-client-k8s-gh:latest -t cygnetops/multi-client-k8s-gh:${{ env.SHA }} -f ./client/Dockerfile ./client
+          docker build -t cygnetops/multi-server-k8s-pgfix-gh:latest -t cygnetops/multi-server-k8s-pgfix-gh:${{ env.SHA }} -f ./server/Dockerfile ./server
+          docker build -t cygnetops/multi-worker-k8s-gh:latest -t cygnetops/multi-worker-k8s-gh:${{ env.SHA }} -f ./worker/Dockerfile ./worker
+ 
+      - name: Push
+        run: |-
+          docker push cygnetops/multi-client-k8s-gh:latest
+          docker push cygnetops/multi-server-k8s-pgfix-gh:latest
+          docker push cygnetops/multi-worker-k8s-gh:latest
+ 
+          docker push cygnetops/multi-client-k8s-gh:${{ env.SHA }}
+          docker push cygnetops/multi-server-k8s-pgfix-gh:${{ env.SHA }}
+          docker push cygnetops/multi-worker-k8s-gh:${{ env.SHA }}
+ 
+      - name: Apply
+        run: |-
+          kubectl apply -f k8s
+          kubectl set image deployments/server-deployment server=cygnetops/multi-server-k8s-pgfix-gh:${{ env.SHA }}
+          kubectl set image deployments/client-deployment client=cygnetops/multi-client-k8s-gh:${{ env.SHA }}
+          kubectl set image deployments/worker-deployment worker=cygnetops/multi-worker-k8s-gh:${{ env.SHA }}

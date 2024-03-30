@@ -1,0 +1,63 @@
+name: Deploy k8s-docker-app
+on:
+  push:
+    branches:
+      - main
+ 
+env:
+  SHA: $(git rev-parse HEAD)
+ 
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+ 
+      - name: Test
+        run: |-
+          docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
+          docker build -t cygnetops/react-test -f ./client/Dockerfile.dev ./client
+          docker run -e CI=true cygnetops/react-test npm test
+ 
+      - name: Set Service Key
+        uses: 'google-github-actions/auth@v0'
+        with:
+          credentials_json: '${{ secrets.GKE_SA_KEY }}'
+ 
+      - name: Set Project
+        uses: google-github-actions/setup-gcloud@v0
+        with:
+          project_id: kubernetes-client-server-app
+ 
+      - name: Auth
+        run: |-
+          gcloud --quiet auth configure-docker
+ 
+      - name: Get Credentials
+        uses: google-github-actions/get-gke-credentials@v0
+        with:
+          cluster_name: multi-cluster
+          location: asia-south1-a
+ 
+      - name: Build
+        run: |-
+          docker build -t adi2911/react-client:latest -t adi2911/react-client:${{ env.SHA }} -f ./client/Dockerfile ./client
+          docker build -t adi2911/express-server:latest -t adi2911/express-server:${{ env.SHA }} -f ./server/Dockerfile ./server
+          docker build -t adi2911/worker:latest -t adi2911/worker:${{ env.SHA }} -f ./worker/Dockerfile ./worker
+ 
+      - name: Push
+        run: |-
+          docker push adi2911/react-client:latest
+          docker push adi2911/express-server:latest
+          docker push adi2911/worker:latest
+ 
+          docker push adi2911/react-client:${{ env.SHA }}
+          docker push adi2911/express-server:${{ env.SHA }}
+          docker push adi2911/worker:${{ env.SHA }}
+ 
+      - name: Apply
+        run: |-
+          kubectl apply -f k8s
+          kubectl set image deployments/server-deployment server=adi2911/express-server:${{ env.SHA }}
+          kubectl set image deployments/client-deployment client=adi2911/react-client:${{ env.SHA }}
+          kubectl set image deployments/worker-deployment worker=adi2911/worker:${{ env.SHA }}
